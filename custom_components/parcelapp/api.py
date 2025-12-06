@@ -1,7 +1,9 @@
 """ParcelApp API client."""
 import aiohttp
 import logging
+
 from typing import Optional, Dict, Any, List
+from .cache import ParcelAppCache
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -15,6 +17,7 @@ class ParcelAppAPI:
         """Initialize the API client."""
         self.api_key = api_key
         self.session: Optional[aiohttp.ClientSession] = None
+        self.cache = ParcelAppCache()
 
     async def async_get_session(self) -> aiohttp.ClientSession:
         """Get or create aiohttp session."""
@@ -37,14 +40,7 @@ class ParcelAppAPI:
     async def get_deliveries(
         self, filter_mode: str = "recent"
     ) -> Dict[str, Any]:
-        """Get deliveries from ParcelApp API.
-
-        Args:
-            filter_mode: Either "active" or "recent". Default is "recent".
-
-        Returns:
-            API response dict with success status and deliveries list.
-        """
+        """Get deliveries from ParcelApp API, with local cache fallback."""
         try:
             session = await self.async_get_session()
             url = f"{API_BASE_URL}/deliveries/?filter_mode={filter_mode}"
@@ -53,6 +49,9 @@ class ParcelAppAPI:
                 if resp.status == 200:
                     data = await resp.json()
                     _LOGGER.debug("API response: %s", data)
+                    # Save to cache if successful
+                    if data.get("success") and "deliveries" in data:
+                        self.cache.save_deliveries(data["deliveries"])
                     return data
                 elif resp.status == 429:
                     # Rate limited
@@ -60,6 +59,11 @@ class ParcelAppAPI:
                     _LOGGER.warning(
                         "API rate limited (429). Response: %s", error_text
                     )
+                    # Fallback to cache
+                    cached = self.cache.load_deliveries()
+                    if cached:
+                        _LOGGER.info("Using cached deliveries due to rate limit.")
+                        return {"success": True, "deliveries": cached, "cached": True}
                     return {
                         "success": False,
                         "error_message": "You were rate limited, please do not send more than 20 requests per hour.",
@@ -69,15 +73,28 @@ class ParcelAppAPI:
                     _LOGGER.error(
                         "API request failed with status %s: %s", resp.status, error_text
                     )
+                    # Fallback to cache
+                    cached = self.cache.load_deliveries()
+                    if cached:
+                        _LOGGER.info("Using cached deliveries due to API error.")
+                        return {"success": True, "deliveries": cached, "cached": True}
                     return {
                         "success": False,
                         "error_message": f"HTTP {resp.status}",
                     }
         except aiohttp.ClientError as err:
             _LOGGER.error(f"API request failed: {err}")
+            cached = self.cache.load_deliveries()
+            if cached:
+                _LOGGER.info("Using cached deliveries due to client error.")
+                return {"success": True, "deliveries": cached, "cached": True}
             return {"success": False, "error_message": str(err)}
         except Exception as err:
             _LOGGER.error(f"Unexpected error: {err}")
+            cached = self.cache.load_deliveries()
+            if cached:
+                _LOGGER.info("Using cached deliveries due to unexpected error.")
+                return {"success": True, "deliveries": cached, "cached": True}
             return {"success": False, "error_message": str(err)}
 
     async def add_delivery(
