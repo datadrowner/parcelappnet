@@ -8,14 +8,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceRegistry, async_get as async_get_device_registry
 
 from .api import ParcelAppAPI
-from .const import DOMAIN, PLATFORMS
+from .const import DOMAIN, PLATFORMS, DEFAULT_POLL_INTERVAL, MIN_POLL_INTERVAL, DEFAULT_FILTER_MODE
 from .coordinator import ParcelAppCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-# Default configuration
-DEFAULT_POLL_INTERVAL = 300  # 5 minutes
-DEFAULT_FILTER_MODE = "active"
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -29,6 +26,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             return False
 
         poll_interval = entry.options.get("poll_interval", DEFAULT_POLL_INTERVAL)
+        # Enforce minimum poll interval to respect API rate limits (20 req/hour max)
+        if poll_interval < MIN_POLL_INTERVAL:
+            _LOGGER.warning(
+                "Poll interval %d is below minimum %d seconds. Using minimum to respect API limits.",
+                poll_interval,
+                MIN_POLL_INTERVAL,
+            )
+            poll_interval = MIN_POLL_INTERVAL
         filter_mode = entry.options.get("filter_mode", DEFAULT_FILTER_MODE)
 
         api = ParcelAppAPI(api_key)
@@ -36,7 +41,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass, api, poll_interval=poll_interval, filter_mode=filter_mode
         )
 
-        # Fetch initial data
+        # On setup, try to use cache first if available to minimize API calls
+        cached_deliveries = coordinator.cache.load_deliveries()
+        if cached_deliveries:
+            _LOGGER.info("Using cached deliveries on setup to minimize API calls.")
+            coordinator._skip_first_request = True
+
+        # Fetch initial data (will use cache if flag is set)
         await coordinator.async_config_entry_first_refresh()
 
         hass.data[DOMAIN][entry.entry_id] = {

@@ -4,7 +4,8 @@ DOMAIN = "parcelapp"
 PLATFORMS = ["sensor"]
 
 # Configuration defaults
-DEFAULT_POLL_INTERVAL = 300  # 5 minutes
+DEFAULT_POLL_INTERVAL = 360  # 6 minutes = 10 requests per hour (API limit is 20/hour, stay safe)
+MIN_POLL_INTERVAL = 360  # Minimum 6 minutes to stay within API limits
 DEFAULT_FILTER_MODE = "active"
 DEFAULT_REMOVAL_AGE_DAYS = 3
 

@@ -7,6 +7,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import ParcelAppAPI
+from .cache import ParcelAppCache
 from .const import DEFAULT_REMOVAL_AGE_DAYS
 
 _LOGGER = logging.getLogger(__name__)
@@ -44,10 +45,20 @@ class ParcelAppCoordinator(DataUpdateCoordinator):
         self.api = api
         self.filter_mode = filter_mode
         self.hass = hass
+        self.cache = ParcelAppCache()
+        self._skip_first_request = False  # Flag to skip API call on first refresh if cache exists
 
     async def _async_update_data(self) -> Dict[str, Any]:
-        """Fetch data from the API."""
+        """Fetch data from the API, using cache as fallback."""
         try:
+            # On first setup/reload, use cache if available to minimize API calls
+            if self._skip_first_request:
+                cached = self.cache.load_deliveries()
+                if cached:
+                    _LOGGER.info("Using cached deliveries for initial setup.")
+                    return {"deliveries": cached, "cached": True}
+                self._skip_first_request = False
+            
             result = await self.api.get_deliveries(filter_mode=self.filter_mode)
 
             if not result.get("success"):
