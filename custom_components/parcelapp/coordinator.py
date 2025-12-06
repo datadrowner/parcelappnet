@@ -52,6 +52,15 @@ class ParcelAppCoordinator(DataUpdateCoordinator):
 
             if not result.get("success"):
                 error_msg = result.get("error_message", "Unknown error")
+                
+                # Handle rate limiting with retry_after
+                if "rate limit" in error_msg.lower() or "429" in error_msg:
+                    _LOGGER.warning(
+                        "ParcelApp API rate limited. Will retry in 1 hour. "
+                        "Consider increasing poll interval to avoid rate limits."
+                    )
+                    raise UpdateFailed(error_msg, retry_after=3600)  # Retry after 1 hour
+                
                 _LOGGER.warning("ParcelApp API error: %s", error_msg)
                 raise UpdateFailed(f"API error: {error_msg}")
 

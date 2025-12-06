@@ -52,11 +52,22 @@ class ParcelAppAPI:
             async with session.get(url, headers=self._get_headers()) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    _LOGGER.debug(f"API response: {data}")
+                    _LOGGER.debug("API response: %s", data)
                     return data
+                elif resp.status == 429:
+                    # Rate limited
+                    error_text = await resp.text()
+                    _LOGGER.warning(
+                        "API rate limited (429). Response: %s", error_text
+                    )
+                    return {
+                        "success": False,
+                        "error_message": "You were rate limited, please do not send more than 20 requests per hour.",
+                    }
                 else:
+                    error_text = await resp.text()
                     _LOGGER.error(
-                        f"API request failed with status {resp.status}: {await resp.text()}"
+                        "API request failed with status %s: %s", resp.status, error_text
                     )
                     return {
                         "success": False,
