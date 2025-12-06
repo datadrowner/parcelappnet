@@ -1,0 +1,12 @@
+{
+  "manifest_version": 1,
+  "domain": "parcelapp",
+  "name": "ParcelApp",
+  "codeowners": ["@yourusername"],
+  "config_flow": true,
+  "documentation": "https://github.com/yourusername/ha-parcelapp",
+  "issue_tracker": "https://github.com/yourusername/ha-parcelapp/issues",
+  "requirements": [],
+  "version": "1.0.0",
+  "homeassistant": "2024.1.0"
+}
