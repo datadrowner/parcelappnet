@@ -59,6 +59,7 @@ known_devices.yaml
 
 # Test files
 test_api_simple.py
+test_api.py
 test_output.json
 *.tmp
 
