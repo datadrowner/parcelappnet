@@ -51,7 +51,9 @@ class ParcelAppCoordinator(DataUpdateCoordinator):
             result = await self.api.get_deliveries(filter_mode=self.filter_mode)
 
             if not result.get("success"):
-                raise UpdateFailed(f"API error: {result.get('error_message')}")
+                error_msg = result.get("error_message", "Unknown error")
+                _LOGGER.warning("ParcelApp API error: %s", error_msg)
+                raise UpdateFailed(f"API error: {error_msg}")
 
             deliveries = result.get("deliveries", [])
 
@@ -95,8 +97,11 @@ class ParcelAppCoordinator(DataUpdateCoordinator):
 
             return {"deliveries": processed_deliveries}
 
+        except UpdateFailed:
+            raise
         except Exception as err:
-            raise UpdateFailed(f"Error updating deliveries: {err}")
+            _LOGGER.exception("Unexpected error updating deliveries: %s", err)
+            raise UpdateFailed(f"Error updating deliveries: {err}") from err
 
     def _should_remove_delivery(self, delivery: Dict[str, Any]) -> bool:
         """Check if a delivery should be removed (completed 3+ days ago)."""
@@ -117,6 +122,6 @@ class ParcelAppCoordinator(DataUpdateCoordinator):
 
             # Remove if delivered 3 or more days ago
             return days_ago >= DEFAULT_REMOVAL_AGE_DAYS
-        except ValueError:
+        except (ValueError, TypeError) as err:
             _LOGGER.warning(f"Could not parse delivery date: {date_str}")
             return False

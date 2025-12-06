@@ -70,77 +70,107 @@ class ParcelAppSensor(CoordinatorEntity, SensorEntity):
     @property
     def device_info(self):
         """Return device info for this delivery."""
-        delivery = self._get_delivery()
-        if not delivery:
-            return None
+        try:
+            delivery = self._get_delivery()
+            if not delivery:
+                return None
 
-        return {
-            "identifiers": {("parcelapp", self.tracking_number)},
-            "name": delivery.get("description", self.tracking_number),
-            "manufacturer": "ParcelApp",
-            "model": delivery.get("carrier_code", "Unknown"),
-            "sw_version": "1.0.0",
-        }
+            return {
+                "identifiers": {("parcelapp", self.tracking_number)},
+                "name": delivery.get("description", self.tracking_number),
+                "manufacturer": "ParcelApp",
+                "model": delivery.get("carrier_code", "Unknown"),
+                "sw_version": "1.0.0",
+            }
+        except Exception as err:
+            _LOGGER.error(
+                "Error getting device info for %s: %s", self.tracking_number, err
+            )
+            return None
 
     @property
     def state(self) -> Optional[str]:
         """Return the state of the sensor."""
-        delivery = self._get_delivery()
-        if not delivery:
-            return STATE_UNKNOWN
+        try:
+            delivery = self._get_delivery()
+            if not delivery:
+                return STATE_UNKNOWN
 
-        status_code = delivery.get("status_code")
-        return DELIVERY_STATUS_CODES.get(status_code, STATE_UNKNOWN)
+            status_code = delivery.get("status_code")
+            return DELIVERY_STATUS_CODES.get(status_code, STATE_UNKNOWN)
+        except Exception as err:
+            _LOGGER.error(
+                "Error getting state for %s: %s", self.tracking_number, err
+            )
+            return STATE_UNKNOWN
 
     @property
     def extra_state_attributes(self):
         """Return extra state attributes."""
-        delivery = self._get_delivery()
-        if not delivery:
-            return {}
+        try:
+            delivery = self._get_delivery()
+            if not delivery:
+                return {}
 
-        # Get the most recent event
-        events = delivery.get("events", [])
-        latest_event = None
-        if events:
-            latest_event = {
-                "event": events[0].get("event"),
-                "date": events[0].get("date"),
-                "location": events[0].get("location"),
-                "additional": events[0].get("additional"),
+            # Get the most recent event
+            events = delivery.get("events", [])
+            latest_event = None
+            if events and isinstance(events, list) and len(events) > 0:
+                latest_event = {
+                    "event": events[0].get("event"),
+                    "date": events[0].get("date"),
+                    "location": events[0].get("location"),
+                    "additional": events[0].get("additional"),
+                }
+
+            attributes = {
+                "tracking_number": delivery.get("tracking_number"),
+                "carrier": delivery.get("carrier_code"),
+                "description": delivery.get("description"),
+                "status_code": delivery.get("status_code"),
+                "date_expected": delivery.get("date_expected"),
+                "latest_event": latest_event,
             }
 
-        attributes = {
-            "tracking_number": delivery.get("tracking_number"),
-            "carrier": delivery.get("carrier_code"),
-            "description": delivery.get("description"),
-            "status_code": delivery.get("status_code"),
-            "date_expected": delivery.get("date_expected"),
-            "latest_event": latest_event,
-        }
+            # Add optional fields if present
+            if delivery.get("date_expected_end"):
+                attributes["date_expected_end"] = delivery.get("date_expected_end")
+            if delivery.get("extra_information"):
+                attributes["extra_information"] = delivery.get("extra_information")
+            if delivery.get("timestamp_expected"):
+                attributes["timestamp_expected"] = delivery.get("timestamp_expected")
+            if delivery.get("timestamp_expected_end"):
+                attributes["timestamp_expected_end"] = delivery.get(
+                    "timestamp_expected_end"
+                )
 
-        # Add optional fields if present
-        if delivery.get("date_expected_end"):
-            attributes["date_expected_end"] = delivery.get("date_expected_end")
-        if delivery.get("extra_information"):
-            attributes["extra_information"] = delivery.get("extra_information")
-        if delivery.get("timestamp_expected"):
-            attributes["timestamp_expected"] = delivery.get("timestamp_expected")
-        if delivery.get("timestamp_expected_end"):
-            attributes["timestamp_expected_end"] = delivery.get(
-                "timestamp_expected_end"
+            return attributes
+
+        except Exception as err:
+            _LOGGER.error(
+                "Error getting attributes for %s: %s", self.tracking_number, err
             )
-
-        return attributes
+            return {}
 
     def _get_delivery(self):
         """Get the delivery data for this sensor."""
-        if not self.coordinator.data:
+        try:
+            if not self.coordinator.data:
+                return None
+
+            deliveries = self.coordinator.data.get("deliveries", [])
+            if not isinstance(deliveries, list):
+                _LOGGER.warning("Deliveries data is not a list")
+                return None
+
+            for delivery in deliveries:
+                if delivery.get("tracking_number") == self.tracking_number:
+                    return delivery
+
             return None
 
-        deliveries = self.coordinator.data.get("deliveries", [])
-        for delivery in deliveries:
-            if delivery.get("tracking_number") == self.tracking_number:
-                return delivery
-
-        return None
+        except Exception as err:
+            _LOGGER.error(
+                "Error finding delivery %s: %s", self.tracking_number, err
+            )
+            return None

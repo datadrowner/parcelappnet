@@ -20,48 +20,67 @@ DEFAULT_FILTER_MODE = "active"
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up ParcelApp from a config entry."""
-    hass.data.setdefault(DOMAIN, {})
+    try:
+        hass.data.setdefault(DOMAIN, {})
 
-    api_key = entry.data.get("api_key")
-    poll_interval = entry.options.get("poll_interval", DEFAULT_POLL_INTERVAL)
-    filter_mode = entry.options.get("filter_mode", DEFAULT_FILTER_MODE)
+        api_key = entry.data.get("api_key")
+        if not api_key:
+            _LOGGER.error("No API key found in configuration")
+            return False
 
-    api = ParcelAppAPI(api_key)
-    coordinator = ParcelAppCoordinator(
-        hass, api, poll_interval=poll_interval, filter_mode=filter_mode
-    )
+        poll_interval = entry.options.get("poll_interval", DEFAULT_POLL_INTERVAL)
+        filter_mode = entry.options.get("filter_mode", DEFAULT_FILTER_MODE)
 
-    # Fetch initial data
-    await coordinator.async_config_entry_first_refresh()
+        api = ParcelAppAPI(api_key)
+        coordinator = ParcelAppCoordinator(
+            hass, api, poll_interval=poll_interval, filter_mode=filter_mode
+        )
 
-    hass.data[DOMAIN][entry.entry_id] = {
-        "coordinator": coordinator,
-        "api": api,
-    }
+        # Fetch initial data
+        await coordinator.async_config_entry_first_refresh()
 
-    # Set up platforms
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        hass.data[DOMAIN][entry.entry_id] = {
+            "coordinator": coordinator,
+            "api": api,
+        }
 
-    # Set up listeners for options updates
-    entry.async_on_unload(entry.add_update_listener(async_update_options))
+        # Set up platforms
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Schedule device cleanup task
-    hass.async_create_task(async_cleanup_old_deliveries(hass, entry))
+        # Set up listeners for options updates
+        entry.async_on_unload(entry.add_update_listener(async_update_options))
 
-    return True
+        # Schedule device cleanup task
+        hass.async_create_task(async_cleanup_old_deliveries(hass, entry))
+
+        return True
+
+    except Exception as err:
+        _LOGGER.exception("Error setting up ParcelApp integration: %s", err)
+        return False
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    try:
+        unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
-    if unload_ok:
-        api = hass.data[DOMAIN][entry.entry_id].get("api")
-        if api:
-            await api.close()
-        hass.data[DOMAIN].pop(entry.entry_id)
+        if unload_ok:
+            entry_data = hass.data[DOMAIN].get(entry.entry_id)
+            if entry_data:
+                api = entry_data.get("api")
+                if api:
+                    try:
+                        await api.close()
+                    except Exception as err:
+                        _LOGGER.debug("Error closing API session: %s", err)
+                hass.data[DOMAIN].pop(entry.entry_id)
 
-    return unload_ok
+        return unload_ok
+
+    except Exception as err:
+        _LOGGER.exception("Error unloading ParcelApp integration: %s", err)
+        return False
 
 
 async def async_update_options(hass: HomeAssistant, config_entry: ConfigEntry) -> None:
@@ -73,39 +92,55 @@ async def async_cleanup_old_deliveries(
     hass: HomeAssistant, config_entry: ConfigEntry
 ) -> None:
     """Clean up old delivered parcels and their devices."""
-    coordinator: ParcelAppCoordinator = hass.data[DOMAIN][config_entry.entry_id][
-        "coordinator"
-    ]
-    device_registry: DeviceRegistry = async_get_device_registry(hass)
-
     while True:
         try:
+            # Check if entry still exists
+            if config_entry.entry_id not in hass.data.get(DOMAIN, {}):
+                _LOGGER.debug("Config entry removed, stopping cleanup task")
+                break
+
+            coordinator: ParcelAppCoordinator = hass.data[DOMAIN][config_entry.entry_id][
+                "coordinator"
+            ]
+            device_registry: DeviceRegistry = async_get_device_registry(hass)
+
             # Check coordinator data for deliveries marked for removal
             if coordinator.data:
                 deliveries = coordinator.data.get("deliveries", [])
 
                 for delivery in deliveries:
-                    if delivery.get("should_remove"):
-                        tracking_number = delivery.get("tracking_number")
-                        _LOGGER.info(
-                            f"Removing old delivered parcel: {tracking_number}"
-                        )
-
-                        # Find and remove the device
-                        device = device_registry.async_get_device(
-                            identifiers={("parcelapp", tracking_number)}
-                        )
-                        if device:
-                            device_registry.async_remove_device(device.id)
-                            _LOGGER.debug(
-                                f"Removed device for tracking number: {tracking_number}"
+                    try:
+                        if delivery.get("should_remove"):
+                            tracking_number = delivery.get("tracking_number")
+                            _LOGGER.info(
+                                "Removing old delivered parcel: %s", tracking_number
                             )
+
+                            # Find and remove the device
+                            device = device_registry.async_get_device(
+                                identifiers={(
+"parcelapp", tracking_number)}
+                            )
+                            if device:
+                                device_registry.async_remove_device(device.id)
+                                _LOGGER.debug(
+                                    "Removed device for tracking number: %s", tracking_number
+                                )
+                    except Exception as err:
+                        _LOGGER.error(
+                            "Error removing device %s: %s",
+                            delivery.get("tracking_number", "unknown"),
+                            err,
+                        )
 
             # Wait for the next coordinator update before checking again
             await coordinator.async_refresh()
 
+        except asyncio.CancelledError:
+            _LOGGER.debug("Cleanup task cancelled")
+            break
         except Exception as err:
-            _LOGGER.error(f"Error in cleanup task: {err}")
+            _LOGGER.error("Error in cleanup task: %s", err, exc_info=True)
             # Continue running even if there's an error
             await asyncio.sleep(60)
 
