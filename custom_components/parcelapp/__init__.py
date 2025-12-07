@@ -42,10 +42,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
 
         # On setup, try to use cache first if available to minimize API calls
-        cached_deliveries = coordinator.cache.load_deliveries()
-        if cached_deliveries:
-            _LOGGER.info("Using cached deliveries on setup to minimize API calls.")
-            coordinator._skip_first_request = True
+        if coordinator.cache:
+            try:
+                cached_deliveries = coordinator.cache.load_deliveries()
+                if cached_deliveries:
+                    _LOGGER.info("Using cached deliveries on setup to minimize API calls.")
+                    coordinator._skip_first_request = True
+            except Exception as cache_err:
+                _LOGGER.warning("Failed to load cache on setup: %s", cache_err)
 
         # Fetch initial data (will use cache if flag is set)
         await coordinator.async_config_entry_first_refresh()

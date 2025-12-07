@@ -45,7 +45,14 @@ class ParcelAppCoordinator(DataUpdateCoordinator):
         self.api = api
         self.filter_mode = filter_mode
         self.hass = hass
-        self.cache = ParcelAppCache()
+        
+        # Initialize cache with error handling
+        try:
+            self.cache = ParcelAppCache()
+        except Exception as cache_err:
+            _LOGGER.error("Failed to initialize cache: %s. Caching will be disabled.", cache_err)
+            self.cache = None
+        
         self._skip_first_request = False  # Flag to skip API call on first refresh if cache exists
         
         # Rate limit handling
@@ -67,9 +74,13 @@ class ParcelAppCoordinator(DataUpdateCoordinator):
                         "API rate limited. Waiting %.0f seconds before retry. Using cached data.",
                         time_remaining
                     )
-                    cached = self.cache.load_deliveries()
-                    if cached:
-                        return {"deliveries": cached, "cached": True, "rate_limited": True}
+                    if self.cache:
+                        try:
+                            cached = self.cache.load_deliveries()
+                            if cached:
+                                return {"deliveries": cached, "cached": True, "rate_limited": True}
+                        except Exception as cache_err:
+                            _LOGGER.error("Failed to load cached deliveries: %s", cache_err)
                     raise UpdateFailed("API rate limited. Waiting for recovery.")
                 
                 # Rate limit window has expired, attempt probe request
@@ -77,43 +88,63 @@ class ParcelAppCoordinator(DataUpdateCoordinator):
                     _LOGGER.info("Rate limit window expired. Attempting probe request to check API status...")
                     self._probe_in_progress = True
                     
-                    probe_result = await self.api.get_deliveries(filter_mode=self.filter_mode)
-                    
-                    if probe_result.get("success"):
-                        # API is back, reset rate limit flags
-                        _LOGGER.info("✓ API is back online! Resuming normal operation.")
-                        self._rate_limited = False
-                        self._rate_limit_until = None
-                        self._probe_in_progress = False
-                        # Continue with normal request below
-                    else:
-                        error_msg = probe_result.get("error_message", "Unknown error")
-                        if "rate limit" in error_msg.lower() or "429" in error_msg:
-                            # Still rate limited, extend wait period
-                            _LOGGER.warning("API still rate limited. Extending wait period.")
-                            self._rate_limit_until = datetime.now() + timedelta(hours=1)
-                            self._probe_in_progress = False
-                            
-                            cached = self.cache.load_deliveries()
-                            if cached:
-                                return {"deliveries": cached, "cached": True, "rate_limited": True}
-                            raise UpdateFailed("API still rate limited. Waiting for recovery.")
-                        else:
-                            # Different error, reset rate limit state
-                            _LOGGER.warning("Probe request failed with different error: %s", error_msg)
+                    try:
+                        probe_result = await self.api.get_deliveries(filter_mode=self.filter_mode)
+                        
+                        if probe_result.get("success"):
+                            # API is back, reset rate limit flags and process deliveries
+                            _LOGGER.info("✓ API is back online! Resuming normal operation.")
                             self._rate_limited = False
                             self._rate_limit_until = None
                             self._probe_in_progress = False
-                            raise UpdateFailed(f"API error: {error_msg}")
+                            
+                            # Process and return the probe data to avoid double API call
+                            deliveries = probe_result.get("deliveries", [])
+                            processed_deliveries = self._process_deliveries(deliveries)
+                            return {"deliveries": processed_deliveries}
+                        else:
+                            error_msg = probe_result.get("error_message", "Unknown error")
+                            if "rate limit" in error_msg.lower() or "429" in error_msg:
+                                # Still rate limited, extend wait period
+                                _LOGGER.warning("API still rate limited. Extending wait period.")
+                                self._rate_limit_until = datetime.now() + timedelta(hours=1)
+                                self._probe_in_progress = False
+                                
+                                if self.cache:
+                                    try:
+                                        cached = self.cache.load_deliveries()
+                                        if cached:
+                                            return {"deliveries": cached, "cached": True, "rate_limited": True}
+                                    except Exception as cache_err:
+                                        _LOGGER.error("Failed to load cached deliveries: %s", cache_err)
+                                raise UpdateFailed("API still rate limited. Waiting for recovery.")
+                            else:
+                                # Different error, reset rate limit state
+                                _LOGGER.warning("Probe request failed with different error: %s", error_msg)
+                                self._rate_limited = False
+                                self._rate_limit_until = None
+                                self._probe_in_progress = False
+                                raise UpdateFailed(f"API error: {error_msg}")
+                    except Exception as probe_err:
+                        # Probe request itself failed, reset state and let normal error handling proceed
+                        _LOGGER.error("Probe request crashed: %s", probe_err, exc_info=True)
+                        self._rate_limited = False
+                        self._rate_limit_until = None
+                        self._probe_in_progress = False
+                        raise UpdateFailed(f"Probe request failed: {probe_err}") from probe_err
                     
                     self._probe_in_progress = False
             
             # On first setup/reload, use cache if available to minimize API calls
             if self._skip_first_request:
-                cached = self.cache.load_deliveries()
-                if cached:
-                    _LOGGER.info("Using cached deliveries for initial setup.")
-                    return {"deliveries": cached, "cached": True}
+                if self.cache:
+                    try:
+                        cached = self.cache.load_deliveries()
+                        if cached:
+                            _LOGGER.info("Using cached deliveries for initial setup.")
+                            return {"deliveries": cached, "cached": True}
+                    except Exception as cache_err:
+                        _LOGGER.warning("Failed to load cached deliveries on setup: %s", cache_err)
                 self._skip_first_request = False
             
             result = await self.api.get_deliveries(filter_mode=self.filter_mode)
@@ -131,9 +162,13 @@ class ParcelAppCoordinator(DataUpdateCoordinator):
                     self._rate_limit_until = datetime.now() + timedelta(hours=1)
                     
                     # Return cached data instead of raising
-                    cached = self.cache.load_deliveries()
-                    if cached:
-                        return {"deliveries": cached, "cached": True, "rate_limited": True}
+                    if self.cache:
+                        try:
+                            cached = self.cache.load_deliveries()
+                            if cached:
+                                return {"deliveries": cached, "cached": True, "rate_limited": True}
+                        except Exception as cache_err:
+                            _LOGGER.error("Failed to load cached deliveries during rate limit: %s", cache_err)
                     
                     raise UpdateFailed(error_msg, retry_after=3600)
                 
